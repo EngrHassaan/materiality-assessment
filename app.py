@@ -556,7 +556,7 @@ def main():
         <rect width="200" height="60" rx="12" fill="url(#grad1)" />
         <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" 
               font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="white">
-            ESG Analytics
+            ESGFP Analytics
         </text>
     </svg>
     """
