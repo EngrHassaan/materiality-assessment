@@ -2354,7 +2354,7 @@ def render_esgfp_validation():
     - Monte Carlo simulation for sensitivity analysis
     - Data Envelopment Analysis (DEA) for efficiency scoring
     - Weight stability analysis
-    - Scenario robustness testing
+    # - Scenario robustness testing
     """)
     
     # Defensive retrieval of results: ensure we have a dict-like results object
