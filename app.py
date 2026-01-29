@@ -514,7 +514,9 @@ def init_session_state():
         'materiality_results': None,
         'esgfp_results': None,
         'export_format': 'Excel',
-        'show_real_time_calc': True
+        'show_real_time_calc': True,
+        'esgfp_active_model': None,
+        'esgfp_selection': set()
     }
     
     for key, value in defaults.items():
@@ -543,12 +545,31 @@ def main():
     
     # Sidebar
     with st.sidebar:
-        st.image("https://via.placeholder.com/300x80.png?text=ESG+Analytics", use_container_width=True)
-        
+        logo_svg = """
+    <svg width="200" height="60" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+            <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" style="stop-color:#3b82f6;stop-opacity:1" />
+                <stop offset="100%" style="stop-color:#10b981;stop-opacity:1" />
+            </linearGradient>
+        </defs>
+        <rect width="200" height="60" rx="12" fill="url(#grad1)" />
+        <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" 
+              font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="white">
+            ESG Analytics
+        </text>
+    </svg>
+    """
+    
+        st.markdown(f"""
+    <div style="text-align: left; padding-bottom: 1rem;">
+        {logo_svg}
+    </div>
+    """, unsafe_allow_html=True)
         st.markdown("## 📊 Navigation")
         module = st.radio(
             "Select Module",
-            ["Materiality Assessment", "ESGFP Scoring", "Integrated Dashboard", "Export Results"],
+            ["Model Configuration", "Materiality Assessment", "ESGFP Scoring", "Integrated Dashboard", "Export Results"],
             key="module_select"
         )
         st.session_state.current_module = module
@@ -586,7 +607,9 @@ def main():
             st.session_state.show_docs = True
     
     # Render selected module
-    if module == "Materiality Assessment":
+    if module == "Model Configuration":
+        render_model_configuration()
+    elif module == "Materiality Assessment":
         render_materiality_assessment()
     elif module == "ESGFP Scoring":
         render_esgfp_scoring()
@@ -656,70 +679,58 @@ def render_materiality_assessment():
 
 def render_materiality_configuration():
     st.markdown('<div class="sub-header">Assessment Configuration</div>', unsafe_allow_html=True)
+
+    st.info("Select the Key Issues to include in this Materiality Assessment. To add or edit Pillars, Key Issues, or Indicators, please go to the **Model Configuration** module.")
+
+    st.markdown("### Select Key Issues for Materiality Assessment")
+
+    # Get all key issues from the global model, grouped by pillar
+    all_issues_by_pillar = {}
+    for pillar, issues in st.session_state.esgfp_model.items():
+        if pillar not in all_issues_by_pillar:
+            all_issues_by_pillar[pillar] = []
+        for issue_name, indicators in issues.items():
+            all_issues_by_pillar[pillar].append({
+                'name': issue_name,
+                'pillar': pillar,
+                'color': DEFAULT_PILLARS.get(pillar, {}).get('color', '#666666')
+            })
+
+    # Get current selection of issue names to manage checkbox state
+    selected_issue_names = [issue['name'] for issue in st.session_state.get('key_issues', [])]
     
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("### ➕ Add New Issue")
-        with st.container(border=True):
-            new_issue = st.text_input("Issue Name", key="new_issue_name")
-            new_pillar = st.selectbox("Pillar", list(DEFAULT_PILLARS.keys()), key="new_issue_pillar")
-            
-            if st.button("Add Issue", type="primary", key="add_issue_btn"):
-                if new_issue and new_issue not in [i['name'] for i in st.session_state.key_issues]:
-                    st.session_state.key_issues.append({
-                        'name': new_issue,
-                        'pillar': new_pillar,
-                        'color': DEFAULT_PILLARS[new_pillar]['color']
-                    })
-                    
-                    # Initialize data structures
-                    st.session_state.risk_analysis_data[new_issue] = {
-                        'risks': [],
-                        'likelihood': 3
-                    }
-                    
-                    st.session_state.stakeholder_data[new_issue] = {
-                        'likelihood': 3,
-                        'impact': 3,
-                        'stakeholder_score': 5,
-                        'expert_score': 5
-                    }
-                    
-                    st.success(f"✅ Added: {new_issue}")
-                    st.rerun()
-                elif new_issue:
-                    st.error("Issue already exists!")
-    
-    with col2:
-        st.markdown("### ➖ Remove Issue")
-        with st.container(border=True):
-            if st.session_state.key_issues:
-                issue_to_remove = st.selectbox(
-                    "Select issue to remove",
-                    options=[i['name'] for i in st.session_state.key_issues],
-                    key="remove_issue_select"
-                )
-                
-                if st.button("Remove Issue", type="secondary", key="remove_issue_btn"):
-                    st.session_state.key_issues = [
-                        i for i in st.session_state.key_issues 
-                        if i['name'] != issue_to_remove
-                    ]
-                    
-                    # Clean up data
-                    for data in [st.session_state.risk_analysis_data, 
-                               st.session_state.stakeholder_data]:
-                        data.pop(issue_to_remove, None)
-                    
-                    st.success(f"✅ Removed: {issue_to_remove}")
-                    st.rerun()
-            else:
-                st.info("No issues to remove")
-    
+    newly_selected_issues = []
+
+    # Display issues grouped by pillar with checkboxes
+    for pillar, issues_in_pillar in all_issues_by_pillar.items():
+        with st.expander(f"🏛️ {pillar}", expanded=True):
+            for issue in issues_in_pillar:
+                is_checked = issue['name'] in selected_issue_names
+                if st.checkbox(issue['name'], value=is_checked, key=f"issue_selector_{issue['name'].replace(' ', '_')}"):
+                    newly_selected_issues.append(issue)
+
+    # Update session state with the new selection
+    st.session_state.key_issues = newly_selected_issues
+
+    # Initialize data structures for newly selected issues
+    for issue in st.session_state.key_issues:
+        issue_name = issue['name']
+        if issue_name not in st.session_state.risk_analysis_data:
+            st.session_state.risk_analysis_data[issue_name] = {
+                'risks': [],
+                'likelihood': 3
+            }
+        if issue_name not in st.session_state.stakeholder_data:
+            st.session_state.stakeholder_data[issue_name] = {
+                'likelihood': 3,
+                'impact': 3,
+                'stakeholder_score': 5,
+                'expert_score': 5
+            }
+
     st.markdown("---")
     
-    # Risk categories management
+    # Risk categories management (can stay here)
     st.markdown("### ⚙️ Risk Categories Management")
     
     col1, col2 = st.columns([2, 1])
@@ -765,10 +776,10 @@ def render_materiality_configuration():
             if st.button(f"Delete Category: {cat}", key=f"del_cat_{cat}", type="secondary"):
                 del st.session_state.risk_categories[cat]
                 st.rerun()
-    
+
     st.markdown("---")
     
-    # Assessment methods selection
+    # Assessment methods selection (can also stay here)
     st.markdown("### 📊 Assessment Methods")
     
     col1, col2 = st.columns(2)
@@ -842,17 +853,15 @@ def render_risk_analysis():
                         stored_defaults = st.session_state.risk_analysis_data.get(issue_name, {}).get('risks', [])
                         default_filtered = [r for r in stored_defaults if r in all_risks]
 
-                        selected = st.multiselect(
-                            "Select Risks",
-                            options=all_risks,
-                            default=default_filtered,
-                            key=f"ra_risks_{issue_name}"
-                        )
-
-                        # Persist selection defensively
-                        if issue_name not in st.session_state.risk_analysis_data:
-                            st.session_state.risk_analysis_data[issue_name] = {'risks': [], 'likelihood': 3}
-                        st.session_state.risk_analysis_data[issue_name]['risks'] = list(selected)
+                        with st.expander("Select Risks", expanded=True):
+                            selected_risks = []
+                            for risk in all_risks:
+                                is_checked = risk in default_filtered
+                                if st.checkbox(risk, value=is_checked, key=f"risk_cb_{issue_name}_{risk.replace(' ', '_')}"):
+                                    selected_risks.append(risk)
+                            st.session_state.risk_analysis_data[issue_name]['risks'] = selected_risks
+                        
+                        selected = st.session_state.risk_analysis_data[issue_name]['risks']
 
                         # Calculate and display impact (guarded to avoid UI-breaking exceptions)
                         try:
@@ -1445,24 +1454,72 @@ def render_esgfp_scoring():
         render_esgfp_validation()
 
 def render_esgfp_model_setup():
-    st.markdown('<div class="sub-header">Model Setup & Configuration</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">ESGFP Model Selection</div>', unsafe_allow_html=True)
     
     with st.expander("Help — How to use this tab", expanded=False):
         st.markdown(
             """
-            - Use this page to create or import the ESGFP model: add Pillars, Key Issues and Indicators.
-            - To add an indicator: select or create a Pillar and Key Issue, provide indicator name, unit and mode, then click **Add Indicator**.
-            - After finishing, click **Next: AHP Weighting** to proceed. Clicking Next runs the calculation that aggregates indicator-level scores into Key Issue and Pillar scores.
-            - Tip: indicator names must match exactly when referencing values in later steps; use the dropdowns where available.
+            - Select the Pillars, Key Issues, and Indicators to include in this ESGFP scoring analysis.
+            - The list of available items is managed in the **Model Configuration** module.
+            - After selecting the scope of your analysis, click **Next: AHP Weighting** to proceed.
             """
         )
+
+    st.markdown("### Select Items for ESGFP Scoring")
+
+    # Get the global model
+    global_model = st.session_state.get('esgfp_model', {})
     
-    # Status indicator
-    render_esgfp_status("model_setup")
-    # Display current model structure with all items expanded
-    with st.expander("📊 Current Model Structure", expanded=True):
-        if st.session_state.esgfp_model:
-            for pillar, issues in st.session_state.esgfp_model.items():
+    # Initialize selection state if it doesn't exist, default to all items selected
+    if 'esgfp_selection' not in st.session_state or not st.session_state.esgfp_selection:
+        st.session_state.esgfp_selection = {
+            f"{p}:{i}:{ind.indicator}"
+            for p, issues in global_model.items()
+            for i, indicators in issues.items()
+            for ind in indicators
+        }
+
+    # UI for selection
+    new_selection = set()
+    for pillar, issues in global_model.items():
+        with st.expander(f"🏛️ {pillar}", expanded=True):
+            for issue, indicators in issues.items():
+                st.markdown(f"**{issue}**")
+                for ind in indicators:
+                    item_id = f"{pillar}:{issue}:{ind.indicator}"
+                    is_checked = item_id in st.session_state.esgfp_selection
+                    if st.checkbox(ind.indicator, value=is_checked, key=f"esgfp_selector_{item_id.replace(' ', '_').replace(':', '_')}"):
+                        new_selection.add(item_id)
+    
+    st.session_state.esgfp_selection = new_selection
+
+    # Create the active model based on the selection
+    active_model = {}
+    for item_id in sorted(list(st.session_state.esgfp_selection)):
+        p, i, ind_name = item_id.split(':', 2)
+        
+        # Find the original indicator object from the global model
+        original_indicator = None
+        if p in global_model and i in global_model[p]:
+            for ind in global_model[p][i]:
+                if ind.indicator == ind_name:
+                    original_indicator = ind
+                    break
+        
+        if original_indicator:
+            if p not in active_model:
+                active_model[p] = {}
+            if i not in active_model[p]:
+                active_model[p][i] = []
+            active_model[p][i].append(original_indicator)
+
+    st.session_state.esgfp_active_model = active_model
+    
+    st.markdown("---")
+    st.markdown("#### Selected Model Structure for Analysis")
+    with st.expander("📊 Review Selected Model", expanded=False):
+        if st.session_state.esgfp_active_model:
+            for pillar, issues in st.session_state.esgfp_active_model.items():
                 st.markdown(f"### 🏛️ Pillar: **{pillar}**")
                 for issue, indicators in issues.items():
                     st.markdown(f"#### 📌 Key Issue: **{issue}** ({len(indicators)} indicators)")
@@ -1471,126 +1528,9 @@ def render_esgfp_model_setup():
                         st.markdown(f"**{idx}. 📊 {ind.indicator}**")
                         st.markdown(f"   - Unit: `{ind.unit}`")
                         st.markdown(f"   - Direction: {direction}")
-                        st.markdown(f"   - Default Mode: `{ind.default_mode}`")
-                        st.markdown(f"   - Formula: {ind.formula_desc}")
         else:
-            st.info("No model configured yet. Add your first indicator below.")
-    
-    # Configuration options
-    st.markdown("### ⚙️ Configuration Options")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("#### ➕ Add Custom Indicator")
-        
-        # Get existing pillars and allow creating new ones
-        existing_pillars = list(st.session_state.esgfp_model.keys())
-        pillar_options = existing_pillars + ["+ Create New Pillar"]
-        
-        selected_pillar = st.selectbox(
-            "Select or Create Pillar",
-            pillar_options,
-            key="new_ind_pillar_select"
-        )
-        
-        if selected_pillar == "+ Create New Pillar":
-            new_pillar = st.text_input("Enter New Pillar Name", key="new_ind_pillar_name")
-            selected_pillar = new_pillar if new_pillar else None
-        else:
-            new_pillar = None
-        
-        # Get existing issues for selected pillar
-        if selected_pillar and selected_pillar in st.session_state.esgfp_model:
-            existing_issues = list(st.session_state.esgfp_model[selected_pillar].keys())
-            issue_options = existing_issues + ["+ Create New Key Issue"]
-        else:
-            existing_issues = []
-            issue_options = ["+ Create New Key Issue"]
-        
-        selected_issue = st.selectbox(
-            "Select or Create Key Issue",
-            issue_options,
-            key="new_ind_issue_select"
-        )
-        
-        if selected_issue == "+ Create New Key Issue":
-            new_issue = st.text_input("Enter New Key Issue Name", key="new_ind_issue_name")
-            selected_issue = new_issue if new_issue else None
-        else:
-            new_issue = None
-        
-        # Indicator details
-        new_indicator = st.text_input("Indicator Name", key="new_ind_name")
-        new_unit = st.text_input("Unit", key="new_ind_unit", value="unit")
-        
-        col_a, col_b = st.columns(2)
-        with col_a:
-            higher_better = st.checkbox("Higher is better", value=True, key="new_ind_higher")
-        with col_b:
-            default_mode = st.selectbox("Default Mode", ["A", "B", "C"], key="new_ind_mode")
-        
-        if st.button("✅ Add Indicator", type="primary", key="add_ind_btn"):
-            if selected_pillar and selected_issue and new_indicator:
-                if selected_pillar not in st.session_state.esgfp_model:
-                    st.session_state.esgfp_model[selected_pillar] = {}
-                if selected_issue not in st.session_state.esgfp_model[selected_pillar]:
-                    st.session_state.esgfp_model[selected_pillar][selected_issue] = []
-                
-                new_ind = IndicatorDef(
-                    pillar=selected_pillar,
-                    key_issue=selected_issue,
-                    indicator=new_indicator,
-                    unit=new_unit or "unit",
-                    formula_desc="Custom indicator",
-                    criteria="Criterion",
-                    default_mode=default_mode,
-                    higher_is_better=higher_better
-                )
-                st.session_state.esgfp_model[selected_pillar][selected_issue].append(new_ind)
-                st.success(f"✅ Indicator '{new_indicator}' added to 🏛️ {selected_pillar} > 📌 {selected_issue}!")
-                st.rerun()
-            else:
-                st.error("Please fill in all required fields (Pillar, Key Issue, Indicator)")
-    
-    with col2:
-        st.markdown("#### Import/Export Model")
-        
-        uploaded_file = st.file_uploader("Upload model JSON", type=['json'], key="model_upload")
-        if uploaded_file:
-            try:
-                model_data = json.load(uploaded_file)
-                # Here you would need to convert JSON back to model structure
-                # This is simplified - implement proper deserialization
-                st.success("Model loaded successfully! (Note: Full import not implemented in this example)")
-            except Exception as e:
-                st.error(f"Error loading model file: {e}")
-        
-        if st.button("Export Current Model", type="secondary", key="export_model_btn"):
-            # Simplified export
-            model_json = json.dumps({
-                pillar: {
-                    issue: [
-                        {
-                            'indicator': ind.indicator,
-                            'unit': ind.unit,
-                            'higher_is_better': ind.higher_is_better,
-                            'default_mode': ind.default_mode
-                        }
-                        for ind in indicators
-                    ]
-                    for issue, indicators in issues.items()
-                }
-                for pillar, issues in st.session_state.esgfp_model.items()
-            }, indent=2)
-            
-            st.download_button(
-                label="Download Model JSON",
-                data=model_json,
-                file_name="esgfp_model.json",
-                mime="application/json"
-            )
-    
+            st.warning("No items selected for the ESGFP analysis. Please select at least one indicator.")
+
     if st.button("Next: AHP Weighting →", type="primary", key="next_to_ahp"):
         st.session_state.esgfp_step = 2
         st.rerun()
@@ -1598,92 +1538,93 @@ def render_esgfp_model_setup():
 def render_esgfp_ahp_weighting():
     st.markdown('<div class="sub-header">AHP Weighting for Key Issues</div>', unsafe_allow_html=True)
     
+    active_model = st.session_state.get('esgfp_active_model', {})
+
     with st.expander("Help — How to use this tab", expanded=False):
         st.markdown(
             """
-            - This page lets you set relative weights for Key Issues within each Pillar using sliders.
+            - This page lets you set relative weights for Key Issues within each Pillar using sliders based on the Saaty scale (1-9).
             - Adjust sliders to reflect the importance of each Key Issue. Weights are normalized per Pillar.
             - After adjusting, click **Next: Indicator Scoring** to proceed. The system will use these weights to aggregate indicator scores.
-            - If you want to reset to defaults, change the weights back or re-open the Model Setup.
             """
         )
     
     render_esgfp_status("ahp_weighting")
     st.info("""
     **AHP (Analytic Hierarchy Process)** helps determine the relative importance 
-    of key issues within each pillar. Adjust the sliders to set weights for each key issue.
+    of key issues within each pillar. Adjust the sliders to set weights for each key issue (1=Equal, 9=Extremely Important).
     The weights will be normalized to sum to 100% per pillar.
     """)
     
-    # Collect all key issues
+    # Collect all key issues from the active model
     all_issues = []
-    for pillar, issues in st.session_state.esgfp_model.items():
+    for pillar, issues in active_model.items():
         for issue in issues.keys():
             all_issues.append(f"{pillar}: {issue}")
     
     if not all_issues:
-        st.warning("No key issues found. Please add indicators in Step 1.")
+        st.warning("No key issues selected. Please select items in Step 1.")
         if st.button("← Back to Model Setup", type="secondary", key="back_to_setup"):
             st.session_state.esgfp_step = 1
             st.rerun()
         return
     
-    st.markdown("### 📊 Key Issues for Weighting")
+    st.markdown("### 📊 Key Issues for Weighting (Saaty Scale 1-9)")
     
-    # Initialize weights if not exists
     if 'esgfp_weights' not in st.session_state:
         st.session_state.esgfp_weights = {}
     
     weights = {}
     
-    for pillar, issues in st.session_state.esgfp_model.items():
+    for pillar, issues in active_model.items():
         with st.expander(f"🏛️ {pillar}", expanded=True):
             st.markdown(f"**{len(issues)} key issues**")
             
-            # Get existing weights or initialize
-            pillar_weights = {}
-            total_weight = 0
+            pillar_weights_raw = {}
+            total_weight_raw = 0
             
             for issue in issues.keys():
                 key = f"{pillar}:{issue}"
-                current_weight = int(st.session_state.esgfp_weights.get(key, 100 // max(len(issues), 1)))
                 
-                weight = st.slider(
-                    f"Weight for: {issue}",
-                    min_value=0,
-                    max_value=100,
-                    value=current_weight,
+                # Get current percentage weight, default to an even distribution if not set
+                current_percentage = st.session_state.esgfp_weights.get(key, 100 // max(len(issues), 1))
+                
+                # Convert current percentage (0-100) to a 1-9 scale for slider display
+                # Default to 5 if no prior weight, or if calculation results in 0
+                slider_initial_value = max(1, min(9, round((current_percentage / 100) * 8) + 1)) if current_percentage > 0 else 5
+
+                weight_slider_value = st.slider(
+                    f"Importance of: {issue}",
+                    min_value=1,
+                    max_value=9,
+                    value=slider_initial_value,
                     step=1,
                     key=f"weight_{pillar}_{issue}"
                 )
                 
-                pillar_weights[issue] = weight
-                total_weight += weight
+                pillar_weights_raw[issue] = weight_slider_value
+                total_weight_raw += weight_slider_value
             
-            # Normalize within pillar
-            if total_weight > 0:
-                for issue, weight in pillar_weights.items():
-                    normalized = (weight / total_weight) * 100
+            if total_weight_raw > 0:
+                for issue, raw_weight in pillar_weights_raw.items():
+                    normalized = (raw_weight / total_weight_raw) * 100
                     key = f"{pillar}:{issue}"
                     weights[key] = normalized
                     st.session_state.esgfp_weights[key] = normalized
                     
-                    # Display normalized weight
                     st.caption(f"{issue}: {normalized:.1f}%")
             else:
-                st.warning("Total weight cannot be zero")
+                st.warning("Total raw weight cannot be zero. Please adjust slider values.")
     
-    # Display weight distribution
     if weights:
         st.markdown("### 📈 Weight Distribution")
         
-        # Create pie chart for each pillar
-        for pillar in st.session_state.esgfp_model.keys():
-            pillar_weights = {k: v for k, v in weights.items() if k.startswith(pillar + ":")}
-            if pillar_weights:
+        for pillar in active_model.keys():
+            pillar_weights_display = {k: v for k, v in weights.items() if k.startswith(pillar + ":")}
+            if pillar_weights_display:
                 df_pie = pd.DataFrame({
-                    'Key Issue': [k.split(":", 1)[1] for k in pillar_weights.keys()],
-                    'Weight %': list(pillar_weights.values())
+                    'Key Issue': [k.split(":", 1)[1] for k in pillar_weights_display.keys()],
+                    'Weight %': list(pillar_weights_display.values())
                 })
                 
                 fig = px.pie(df_pie, values='Weight %', names='Key Issue',
@@ -1703,6 +1644,8 @@ def render_esgfp_ahp_weighting():
 
 def render_esgfp_indicator_scoring():
     st.markdown('<div class="sub-header">Indicator Scoring</div>', unsafe_allow_html=True)
+
+    active_model = st.session_state.get('esgfp_active_model', {})
     
     with st.expander("Help — How to use this tab", expanded=False):
         st.markdown(
@@ -1715,6 +1658,14 @@ def render_esgfp_indicator_scoring():
         )
     
     render_esgfp_status("indicator_scoring")
+
+    if not active_model:
+        st.warning("No model selected for scoring. Please go to Step 1 to select the model for this analysis.")
+        if st.button("← Back to Model Setup", type="secondary", key="back_to_setup_from_scoring"):
+            st.session_state.esgfp_step = 1
+            st.rerun()
+        return
+    
     # Get alternatives
     if 'esgfp_alternatives' not in st.session_state:
         st.session_state.esgfp_alternatives = ["Technology A", "Technology B"]
@@ -1772,7 +1723,7 @@ def render_esgfp_indicator_scoring():
     )
     
     # Scoring interface
-    for pillar, issues in st.session_state.esgfp_model.items():
+    for pillar, issues in active_model.items():
         with st.expander(f"🏛️ {pillar}", expanded=True):
             for issue, indicators in issues.items():
                 weight_key = f"{pillar}:{issue}"
@@ -1886,8 +1837,9 @@ def render_esgfp_indicator_scoring():
             st.rerun()
 
 def calculate_esgfp_results():
-    """Calculate ESGFP results from entered values"""
-    if not st.session_state.esgfp_alternatives:
+    """Calculate ESGFP results from entered values based on the active model."""
+    active_model = st.session_state.get('esgfp_active_model', {})
+    if not st.session_state.esgfp_alternatives or not active_model:
         return
     
     # Initialize results structure
@@ -1897,7 +1849,7 @@ def calculate_esgfp_results():
     
     alternatives = st.session_state.esgfp_alternatives
     
-    for pillar, issues in st.session_state.esgfp_model.items():
+    for pillar, issues in active_model.items():
         pillar_total = 0
         pillar_results[pillar] = {alt: 0 for alt in alternatives}
         key_issue_results[pillar] = {}
@@ -2588,6 +2540,195 @@ def render_esgfp_validation():
             st.session_state.esgfp_step = 1
             st.success("Ready for new analysis!")
             st.rerun()
+
+def render_model_configuration():
+    st.markdown('<div class="main-header">Model Configuration</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="sub-header">ESGFP Model Setup & Configuration</div>', unsafe_allow_html=True)
+    
+    with st.expander("Help — How to use this tab", expanded=False):
+        st.markdown(
+            """
+            - Use this page to create or import the ESGFP model: add Pillars, Key Issues and Indicators.
+            - To add an indicator: select or create a Pillar and Key Issue, provide indicator name, unit and mode, then click **Add Indicator**.
+            - This model will be used across the entire application, including Materiality Assessment and ESGFP Scoring.
+            """
+        )
+    
+    # Display current model structure with all items expanded
+    with st.expander("📊 Current Model Structure", expanded=True):
+        if st.session_state.esgfp_model:
+            for pillar, issues in st.session_state.esgfp_model.items():
+                st.markdown(f"### 🏛️ Pillar: **{pillar}**")
+                for issue, indicators in issues.items():
+                    st.markdown(f"#### 📌 Key Issue: **{issue}** ({len(indicators)} indicators)")
+                    for idx, ind in enumerate(indicators, 1):
+                        direction = "↑ better" if ind.higher_is_better else "↓ better"
+                        st.markdown(f"**{idx}. 📊 {ind.indicator}**")
+                        st.markdown(f"   - Unit: `{ind.unit}`")
+                        st.markdown(f"   - Direction: {direction}")
+                        st.markdown(f"   - Default Mode: `{ind.default_mode}`")
+                        st.markdown(f"   - Formula: {ind.formula_desc}")
+        else:
+            st.info("No model configured yet. Add your first indicator below.")
+    
+    # Configuration options
+    st.markdown("### ⚙️ Configuration Options")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### ➕ Add Custom Indicator")
+        
+        # Get existing pillars and allow creating new ones
+        existing_pillars = list(st.session_state.esgfp_model.keys())
+        pillar_options = existing_pillars + ["+ Create New Pillar"]
+        
+        selected_pillar = st.selectbox(
+            "Select or Create Pillar",
+            pillar_options,
+            key="new_ind_pillar_select_config"
+        )
+        
+        if selected_pillar == "+ Create New Pillar":
+            new_pillar = st.text_input("Enter New Pillar Name", key="new_ind_pillar_name_config")
+            selected_pillar = new_pillar if new_pillar else None
+        else:
+            new_pillar = None
+        
+        # Get existing issues for selected pillar
+        if selected_pillar and selected_pillar in st.session_state.esgfp_model:
+            existing_issues = list(st.session_state.esgfp_model[selected_pillar].keys())
+            issue_options = existing_issues + ["+ Create New Key Issue"]
+        else:
+            existing_issues = []
+            issue_options = ["+ Create New Key Issue"]
+        
+        selected_issue = st.selectbox(
+            "Select or Create Key Issue",
+            issue_options,
+            key="new_ind_issue_select_config"
+        )
+        
+        if selected_issue == "+ Create New Key Issue":
+            new_issue = st.text_input("Enter New Key Issue Name", key="new_ind_issue_name_config")
+            selected_issue = new_issue if new_issue else None
+        else:
+            new_issue = None
+        
+        # Indicator details
+        new_indicator = st.text_input("Indicator Name", key="new_ind_name_config")
+        new_unit = st.text_input("Unit", key="new_ind_unit_config", value="unit")
+        
+        col_a, col_b = st.columns(2)
+        with col_a:
+            higher_better = st.checkbox("Higher is better", value=True, key="new_ind_higher_config")
+        with col_b:
+            default_mode = st.selectbox("Default Mode", ["A", "B", "C"], key="new_ind_mode_config")
+        
+        if st.button("✅ Add Indicator", type="primary", key="add_ind_btn_config"):
+            if selected_pillar and selected_issue and new_indicator:
+                if selected_pillar not in st.session_state.esgfp_model:
+                    st.session_state.esgfp_model[selected_pillar] = {}
+                if selected_issue not in st.session_state.esgfp_model[selected_pillar]:
+                    st.session_state.esgfp_model[selected_pillar][selected_issue] = []
+                
+                new_ind = IndicatorDef(
+                    pillar=selected_pillar,
+                    key_issue=selected_issue,
+                    indicator=new_indicator,
+                    unit=new_unit or "unit",
+                    formula_desc="Custom indicator",
+                    criteria="Criterion",
+                    default_mode=default_mode,
+                    higher_is_better=higher_better
+                )
+                st.session_state.esgfp_model[selected_pillar][selected_issue].append(new_ind)
+                st.success(f"✅ Indicator '{new_indicator}' added to 🏛️ {selected_pillar} > 📌 {selected_issue}!")
+                st.rerun()
+            else:
+                st.error("Please fill in all required fields (Pillar, Key Issue, Indicator)")
+    
+    with col2:
+        st.markdown("#### Import/Export Model")
+        
+        uploaded_file = st.file_uploader("Upload model JSON", type=['json'], key="model_upload_config")
+        if uploaded_file:
+            try:
+                model_data = json.load(uploaded_file)
+                # This needs proper deserialization
+                st.success("Model loaded successfully! (Note: Full import not implemented in this example)")
+            except Exception as e:
+                st.error(f"Error loading model file: {e}")
+        
+        if st.button("Export Current Model", type="secondary", key="export_model_btn_config"):
+            model_json = json.dumps({
+                pillar: {
+                    issue: [
+                        {
+                            'indicator': ind.indicator,
+                            'unit': ind.unit,
+                            'higher_is_better': ind.higher_is_better,
+                            'default_mode': ind.default_mode
+                        }
+                        for ind in indicators
+                    ]
+                    for issue, indicators in issues.items()
+                }
+                for pillar, issues in st.session_state.esgfp_model.items()
+            }, indent=2)
+            
+            st.download_button(
+                label="Download Model JSON",
+                data=model_json,
+                file_name="esgfp_model.json",
+                mime="application/json"
+            )
+
+    st.markdown("---")
+    st.markdown('<div class="sub-header">Risk Categories Management</div>', unsafe_allow_html=True)
+    
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        new_cat = st.text_input("New Category Name", key="new_cat_name_config")
+    with col2:
+        if st.button("Add Category", key="add_cat_btn_config"):
+            if new_cat and new_cat not in st.session_state.risk_categories:
+                st.session_state.risk_categories[new_cat] = []
+                st.success(f"✅ Added category: {new_cat}")
+                st.rerun()
+    
+    for cat in list(st.session_state.risk_categories.keys()):
+        with st.expander(f"📁 {cat}", expanded=False):
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                new_risk = st.text_input(
+                    f"New risk for {cat}",
+                    key=f"new_risk_{cat}_config"
+                )
+            
+            with col2:
+                if st.button("Add", key=f"add_risk_{cat}_config"):
+                    if new_risk and new_risk not in st.session_state.risk_categories[cat]:
+                        st.session_state.risk_categories[cat].append(new_risk)
+                        st.success(f"✅ Added: {new_risk}")
+                        st.rerun()
+            
+            if st.session_state.risk_categories[cat]:
+                st.markdown("**Existing Risks:**")
+                for risk in st.session_state.risk_categories[cat]:
+                    risk_col1, risk_col2 = st.columns([4, 1])
+                    with risk_col1:
+                        st.markdown(f"• {risk}")
+                    with risk_col2:
+                        if st.button("🗑️", key=f"del_{cat}_{risk}_config"):
+                            st.session_state.risk_categories[cat].remove(risk)
+                            st.rerun()
+            
+            if st.button(f"Delete Category: {cat}", key=f"del_cat_{cat}_config", type="secondary"):
+                del st.session_state.risk_categories[cat]
+                st.rerun()
 
 def render_integrated_dashboard():
     st.markdown('<div class="main-header">Integrated Dashboard</div>', unsafe_allow_html=True)
